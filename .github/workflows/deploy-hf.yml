@@ -34,7 +34,6 @@ jobs:
       - name: Create placeholder files
         run: |
           mkdir -p static
-          # إنشاء ملف background.jpg وهمي
           printf '\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00' > static/background.jpg
           
       - name: Build the application
@@ -43,39 +42,30 @@ jobs:
           
       - name: Prepare deployment files
         run: |
-          # إنشاء مجلد للنشر
           mkdir -p deploy
           cp KrillinAI deploy/
           cp -r static deploy/ 2>/dev/null || mkdir -p deploy/static
           cp -r web deploy/ 2>/dev/null || mkdir -p deploy/web
           cp -r config deploy/ 2>/dev/null || mkdir -p deploy/config
           
-          # إنشاء Dockerfile للنشر
+          # إنشاء Dockerfile
           cat > deploy/Dockerfile << 'EOF'
           FROM alpine:latest
-          
           RUN apk add --no-cache ca-certificates ffmpeg wget curl python3 py3-pip
           RUN pip3 install --no-cache-dir yt-dlp
-          
           WORKDIR /app
-          
-          RUN mkdir -p static && \
-              printf '\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00' > static/background.jpg
-          
+          RUN mkdir -p static && printf '\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00' > static/background.jpg
           COPY KrillinAI .
           COPY static ./static
           COPY web ./web
           COPY config ./config
-          
           RUN chmod +x ./KrillinAI
           RUN mkdir -p /app/uploads /app/tasks /app/models
-          
           EXPOSE 7860
-          
           CMD ["./KrillinAI"]
           EOF
           
-          # إنشاء README.md للنشر
+          # إنشاء README.md
           cat > deploy/README.md << 'EOF'
           ---
           title: KrillinAI Arabic
@@ -108,35 +98,122 @@ jobs:
           *مدعوم من KrillinAI - صنع بحب للمجتمع العربي*
           EOF
           
-      - name: Install Hugging Face CLI
-        run: |
-          pip install huggingface-hub
-          
-      - name: Deploy to Hugging Face Space
+      - name: Deploy using Python API (without XET)
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          if [ -z "$HF_TOKEN" ]; then
-            echo "❌ ERROR: HF_TOKEN is not set"
-            exit 1
-          fi
+          pip install requests
           
-          # تسجيل الدخول
-          hf auth login --token "$HF_TOKEN"
+          python3 << 'PYTHON'
+          import os
+          import requests
+          import base64
+          import time
+          import json
+          from pathlib import Path
           
-          SPACE_REPO="new-eissa/my-n8n-automation1"
+          token = os.environ.get('HF_TOKEN')
+          if not token:
+              print("❌ HF_TOKEN not set")
+              exit(1)
           
-          echo "📤 Deploying to: $SPACE_REPO"
+          space = "new-eissa/my-n8n-automation1"
+          headers = {
+              "Authorization": f"Bearer {token}",
+              "Content-Type": "application/json"
+          }
           
-          cd deploy
+          print(f"📤 Deploying to: {space}")
           
-          # استخدام الأمر الصحيح: hf upload بدون --force
-          # مع خيار --delete لحذف الملفات القديمة
-          hf upload $SPACE_REPO . . \
-            --repo-type space \
-            --delete "*" \
-            --token "$HF_TOKEN" \
-            --commit-message "Deploy from GitHub Actions"
+          # 1. التحقق من المساحة
+          check_url = f"https://huggingface.co/api/spaces/{space}"
+          resp = requests.get(check_url, headers=headers)
+          if resp.status_code == 404:
+              print("❌ Space not found! Creating...")
+              # محاولة إنشاء المساحة
+              create_data = {
+                  "name": "my-n8n-automation1",
+                  "sdk": "docker",
+                  "private": False
+              }
+              create_resp = requests.post(
+                  "https://huggingface.co/api/spaces",
+                  headers=headers,
+                  json=create_data
+              )
+              if create_resp.status_code not in [200, 201]:
+                  print(f"❌ Failed to create space: {create_resp.text}")
+                  exit(1)
+              time.sleep(3)
           
-          echo "✅ Deployment completed successfully!"
-          echo "🌐 https://huggingface.co/spaces/$SPACE_REPO"
+          print("✅ Space exists")
+          
+          # 2. حذف الملفات القديمة
+          print("🗑️  Cleaning old files...")
+          list_url = f"https://huggingface.co/api/spaces/{space}/files"
+          try:
+              resp = requests.get(list_url, headers=headers)
+              if resp.status_code == 200:
+                  files = resp.json()
+                  for file in files:
+                      if file.get('type') == 'file':
+                          del_url = f"https://huggingface.co/api/spaces/{space}/file/{file['path']}"
+                          del_resp = requests.delete(del_url, headers=headers)
+                          if del_resp.status_code in [200, 204]:
+                              print(f"  ✅ Deleted: {file['path']}")
+                          else:
+                              print(f"  ⚠️ Could not delete: {file['path']}")
+          except Exception as e:
+              print(f"  ⚠️ Error during cleanup: {e}")
+          
+          time.sleep(2)
+          
+          # 3. رفع الملفات الجديدة (واحداً تلو الآخر)
+          print("📤 Uploading new files...")
+          deploy_dir = Path("deploy")
+          if not deploy_dir.exists():
+              print("❌ deploy directory not found")
+              exit(1)
+          
+          upload_url = f"https://huggingface.co/api/spaces/{space}/upload"
+          files_uploaded = 0
+          
+          for file_path in deploy_dir.rglob("*"):
+              if file_path.is_file():
+                  relative_path = str(file_path.relative_to(deploy_dir))
+                  
+                  with open(file_path, "rb") as f:
+                      content = base64.b64encode(f.read()).decode()
+                  
+                  payload = {
+                      "path": relative_path,
+                      "content": content,
+                      "encoding": "base64"
+                  }
+                  
+                  try:
+                      resp = requests.post(upload_url, headers=headers, json=payload)
+                      if resp.status_code in [200, 201]:
+                          print(f"  ✅ {relative_path}")
+                          files_uploaded += 1
+                      else:
+                          print(f"  ❌ {relative_path} - Status: {resp.status_code}")
+                          if resp.text:
+                              print(f"     Response: {resp.text[:200]}")
+                  except Exception as e:
+                      print(f"  ❌ {relative_path} - Error: {e}")
+                  
+                  time.sleep(0.5)  # تجنب Rate Limit
+          
+          print(f"✅ Deployment complete! {files_uploaded} files uploaded.")
+          print(f"🌐 https://huggingface.co/spaces/{space}")
+          
+          # 4. محاولة إعادة بناء المساحة
+          print("🔄 Triggering rebuild...")
+          rebuild_url = f"https://huggingface.co/api/spaces/{space}/rebuild"
+          rebuild_resp = requests.post(rebuild_url, headers=headers)
+          if rebuild_resp.status_code == 200:
+              print("✅ Rebuild triggered successfully!")
+          else:
+              print(f"⚠️ Could not trigger rebuild: {rebuild_resp.status_code}")
+          PYTHON
