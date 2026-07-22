@@ -1,43 +1,19 @@
-FROM ubuntu:latest
+FROM alpine:latest
+
+RUN apk add --no-cache ca-certificates ffmpeg wget curl python3 py3-pip
+RUN pip3 install yt-dlp
 
 WORKDIR /app
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends wget ca-certificates ffmpeg && \
-    rm -rf /var/lib/apt/lists/*
+# إنشاء صورة وهمية
+RUN mkdir -p static && \
+    printf '\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00' > static/background.jpg
 
-RUN mkdir -p bin && \
-    ARCH=$(uname -m) && \
-    case "$ARCH" in \
-    x86_64) \
-    YT_DLP_URL="https://github.com/yt-dlp/yt-dlp/releases/download/2025.01.15/yt-dlp_linux"; \
-    EDGE_TTS_URL="https://github.com/puji4810/edge-tts-pkg/releases/download/v0.0.1/edge-tts-linux-amd64"; \
-    ;; \
-    armv7l) \
-    YT_DLP_URL="https://github.com/puji4810/edge-tts-pkg/releases/download/v0.0.1/edge-tts-linux-armv7"; \
-    EDGE_TTS_URL="https://github.com/puji4810/edge-tts-pkg/releases/download/v0.0.1/edge-tts-linux-armv7"; \
-    ;; \
-    aarch64) \
-    YT_DLP_URL="https://github.com/yt-dlp/yt-dlp/releases/download/2025.01.15/yt-dlp_linux_aarch64"; \
-    EDGE_TTS_URL="https://github.com/puji4810/edge-tts-pkg/releases/download/v0.0.1/edge-tts-linux-arm64"; \
-    ;; \
-    *) \
-    echo "Unsupported architecture: $ARCH" && exit 1; \
-    ;; \
-    esac && \
-    wget -O bin/yt-dlp "$YT_DLP_URL" && \
-    wget -O bin/edge-tts "$EDGE_TTS_URL" && \
-    chmod +x bin/yt-dlp bin/edge-tts
+COPY . .
 
-COPY KrillinAI ./
+RUN go mod download && go build -o KrillinAI ./cmd/server
+RUN chmod +x ./KrillinAI
 
-RUN mkdir -p /app/models && \
-    chmod +x ./KrillinAI
+EXPOSE 7860
 
-VOLUME ["/app/bin", "/app/models"]
-
-ENV PATH="/app/bin:${PATH}"
-
-EXPOSE 8888/tcp
-
-ENTRYPOINT ["./KrillinAI"]
+CMD ["./KrillinAI"]
