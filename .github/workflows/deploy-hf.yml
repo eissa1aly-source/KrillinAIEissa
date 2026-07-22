@@ -8,130 +8,37 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        
+      - uses: actions/checkout@v4
+
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
           go-version: '1.22'
-          
-      - name: Cache Go modules
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-            
-      - name: Download dependencies
-        run: go mod download
-        
-      - name: Create placeholder files
+
+      - name: Build
         run: |
+          go mod download
           mkdir -p static
-          # إنشاء ملف background.jpg وهمي
           printf '\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00' > static/background.jpg
-          
-      - name: Build the application
-        run: |
           go build -o KrillinAI ./cmd/server
-          
-      - name: Prepare deployment files
-        run: |
-          # إنشاء مجلد للنشر
-          mkdir -p deploy
-          cp KrillinAI deploy/
-          cp -r static deploy/ 2>/dev/null || mkdir -p deploy/static
-          cp -r web deploy/ 2>/dev/null || mkdir -p deploy/web
-          cp -r config deploy/ 2>/dev/null || mkdir -p deploy/config
-          
-          # إنشاء Dockerfile للنشر
-          cat > deploy/Dockerfile << 'EOF'
-          FROM alpine:latest
-          
-          RUN apk add --no-cache ca-certificates ffmpeg wget curl python3 py3-pip
-          RUN pip3 install --no-cache-dir yt-dlp
-          
-          WORKDIR /app
-          
-          RUN mkdir -p static && \
-              printf '\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00' > static/background.jpg
-          
-          COPY KrillinAI .
-          COPY static ./static
-          COPY web ./web
-          COPY config ./config
-          
-          RUN chmod +x ./KrillinAI
-          RUN mkdir -p /app/uploads /app/tasks /app/models
-          
-          EXPOSE 7860
-          
-          CMD ["./KrillinAI"]
-          EOF
-          
-          # إنشاء README.md للنشر
-          cat > deploy/README.md << 'EOF'
-          ---
-          title: KrillinAI Arabic
-          emoji: 🎬
-          colorFrom: purple
-          colorTo: indigo
-          sdk: docker
-          app_port: 7860
-          pinned: false
-          license: gpl-3.0
-          ---
-          
-          # 🎬 KrillinAI Arabic
-          
-          **أداة ترجمة ودبلجة الفيديو بالذكاء الاصطناعي للعرب**
-          
-          ## المميزات
-          - ترجمة ودبلجة الفيديو
-          - دعم اللغة العربية
-          - واجهة سهلة الاستخدام
-          - معالجة سريعة
-          
-          ## طريقة الاستخدام
-          1. ارفع الفيديو
-          2. اختر اللغة
-          3. انتظر المعالجة
-          4. حمل النتيجة
-          
-          ---
-          *مدعوم من KrillinAI - صنع بحب للمجتمع العربي*
-          EOF
-          
-      - name: Install Hugging Face CLI
-        run: |
-          pip install huggingface-hub
-          
-      - name: Deploy to Hugging Face Space
+
+      - name: Deploy to existing HF Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          if [ -z "$HF_TOKEN" ]; then
-            echo "❌ ERROR: HF_TOKEN is not set"
-            exit 1
-          fi
-          
-          # استخدام الأمر الجديد hf
-          hf auth login --token "$HF_TOKEN"
-          
-          echo "📤 Deploying to new-eissa/my-n8n-automation1..."
-          
-          cd deploy
-          
-          # استخدام hf upload بدلاً من huggingface-cli
-          hf upload new-eissa/my-n8n-automation1 . . \
-            --repo-type space \
-            --token "$HF_TOKEN"
-          
-          echo "✅ Deployment completed successfully!"
-          echo "🌐 https://huggingface.co/spaces/new-eissa/my-n8n-automation1"
+          pip install huggingface-hub
+          hf auth login --token $HF_TOKEN
+
+          # تحديد اسم المساحة الموجودة
+          SPACE_REPO="new-eissa/my-n8n-automation1"
+
+          echo "📤 Updating existing space: $SPACE_REPO"
+
+          # رفع الملفات إلى المساحة الموجودة (بدون محاولة الإنشاء)
+          # استخدم --force للتغلب على أي تعارضات
+          hf upload $SPACE_REPO . . --repo-type space --force --token $HF_TOKEN
+
+          echo "✅ Update completed successfully!"
+          echo "🌐 https://huggingface.co/spaces/$SPACE_REPO"
