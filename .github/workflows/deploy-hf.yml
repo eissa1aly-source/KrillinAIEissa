@@ -1,0 +1,33 @@
+name: Deploy to Hugging Face
+
+on:
+  push:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.22'
+          
+      - name: Build
+        run: |
+          go mod download
+          mkdir -p static
+          # إنشاء ملف background.jpg وهمي
+          printf '\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00' > static/background.jpg
+          go build -o KrillinAI ./cmd/server
+          
+      - name: Deploy to HF
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          pip install huggingface-hub
+          huggingface-cli upload new-eissa/my-n8n-automation1 . . --token $HF_TOKEN
